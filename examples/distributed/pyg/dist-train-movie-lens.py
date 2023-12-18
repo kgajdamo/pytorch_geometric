@@ -375,7 +375,7 @@ if __name__ == '__main__':
 
     f.write('--- Loading data partition ...\n')
     root_dir = osp.join(osp.dirname(osp.realpath(__file__)),
-                        args.dataset_root_dir)
+                        args.dataset_root_dir, f'{args.num_nodes}-parts')
     data_pidx = args.node_rank % args.num_dataset_partitions
 
     node_label_file = osp.join(root_dir, f'{args.dataset}-label', 'label.pt')
