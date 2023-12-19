@@ -10,14 +10,13 @@ from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
 import torch_geometric.distributed as pyg_dist
+from torch_geometric.datasets import MovieLens
 from torch_geometric.distributed import LocalFeatureStore, LocalGraphStore
 from torch_geometric.distributed.dist_context import DistContext, DistRole
 from torch_geometric.distributed.partition import load_partition_info
 from torch_geometric.nn import GraphSAGE
-from torch_geometric.typing import Tuple
-
-from torch_geometric.datasets import MovieLens
 from torch_geometric.nn.conv import SAGEConv
+from torch_geometric.typing import Tuple
 
 
 @torch.no_grad()
@@ -40,7 +39,7 @@ def test(model, loader):
 
 def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
                       num_training_procs_per_node: int, dataset_name: str,
-                      root_dir: str, node_label_file: str, in_channels: int,
+                      parts_dir: str, node_label_file: str, in_channels: int,
                       out_channels: int, train_idx: torch.Tensor,
                       test_idx: torch.Tensor, epochs: int, num_neighbors: str,
                       batch_size: int, num_workers: int, concurrency: int,
@@ -51,14 +50,14 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
 
     # load partition into graph
     graph = LocalGraphStore.from_partition(
-        osp.join(root_dir, f'{dataset_name}-partitions'), node_rank)
+        osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
     edge_attrs = graph.get_all_edge_attrs()
 
     print(f"-----  000 edge_attrs={edge_attrs} ")
 
     # load partition into feature
     feature = LocalFeatureStore.from_partition(
-        osp.join(root_dir, f'{dataset_name}-partitions'), node_rank)
+        osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
 
     data_time = torch.arange(max(edge_attrs[0].size))
     feature.put_tensor(data_time, group_name=None, attr_name='edge_time')
@@ -66,7 +65,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     # load partition information
     (meta, num_partitions, partition_idx, node_pb,
      edge_pb) = load_partition_info(
-         osp.join(root_dir, f'{dataset_name}-partitions'), node_rank)
+         osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
 
     # setup the partition information in graph
     graph.num_partitions = num_partitions
@@ -80,7 +79,6 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     feature.partition_idx = partition_idx
     feature.node_feat_pb = node_pb
     feature.edge_feat_pb = edge_pb
-    feature.feature_pb = node_pb
     feature.meta = meta
 
     print(
@@ -374,17 +372,17 @@ if __name__ == '__main__':
     f.write(f'* testing loader master port: {args.test_loader_master_port}\n')
 
     f.write('--- Loading data partition ...\n')
-    root_dir = osp.join(osp.dirname(osp.realpath(__file__)),
-                        args.dataset_root_dir, f'{args.num_nodes}-parts')
+    parts_dir = osp.join(osp.dirname(osp.realpath(__file__)),
+                         args.dataset_root_dir, f'{args.num_nodes}-parts')
     data_pidx = args.node_rank % args.num_dataset_partitions
 
-    node_label_file = osp.join(root_dir, f'{args.dataset}-label', 'label.pt')
+    node_label_file = osp.join(parts_dir, f'{args.dataset}-label', 'label.pt')
 
     train_idx = torch.load(
-        osp.join(root_dir, f'{args.dataset}-train-partitions',
+        osp.join(parts_dir, f'{args.dataset}-train-partitions',
                  f'partition{data_pidx}.pt'))
     test_idx = torch.load(
-        osp.join(root_dir, f'{args.dataset}-test-partitions',
+        osp.join(parts_dir, f'{args.dataset}-test-partitions',
                  f'partition{data_pidx}.pt'))
 
     f.write('--- Launching training processes ...\n')
@@ -392,7 +390,7 @@ if __name__ == '__main__':
     torch.multiprocessing.spawn(
         run_training_proc,
         args=(args.num_nodes, args.node_rank, args.num_training_procs,
-              args.dataset, root_dir, node_label_file, args.in_channel,
+              args.dataset, parts_dir, node_label_file, args.in_channel,
               args.out_channel, train_idx, test_idx, args.epochs,
               args.num_neighbors, args.batch_size, args.num_workers,
               args.concurrency, args.learning_rate, args.master_addr,
