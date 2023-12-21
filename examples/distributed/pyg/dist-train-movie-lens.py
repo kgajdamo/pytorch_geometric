@@ -48,44 +48,38 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
                       train_loader_master_port: int,
                       test_loader_master_port: int):
 
-    # load partition into graph
-    graph = LocalGraphStore.from_partition(
+    # load partition into graph_store
+    graph_store = LocalGraphStore.from_partition(
         osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
-    edge_attrs = graph.get_all_edge_attrs()
+    edge_attrs = graph_store.get_all_edge_attrs()
 
     print(f"-----  000 edge_attrs={edge_attrs} ")
 
-    # load partition into feature
-    feature = LocalFeatureStore.from_partition(
+    # load partition into feature_store
+    feature_store = LocalFeatureStore.from_partition(
         osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
 
-    data_time = torch.arange(max(edge_attrs[0].size))
-    feature.put_tensor(data_time, group_name=None, attr_name='edge_time')
+    edge_time = torch.arange(graph_store._edge_index[(None, 'coo')].size(1))
+    feature_store.put_tensor(edge_time, group_name=None, attr_name='edge_time')
+    input_time = torch.arange(batch_size)
 
     # load partition information
     (meta, num_partitions, partition_idx, node_pb,
      edge_pb) = load_partition_info(
          osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
 
-    # setup the partition information in graph
-    graph.num_partitions = num_partitions
-    graph.partition_idx = partition_idx
-    graph.node_pb = node_pb
-    graph.edge_pb = edge_pb
-    graph.meta = meta
-
-    # setup the partition information in feature
-    feature.num_partitions = num_partitions
-    feature.partition_idx = partition_idx
-    feature.node_feat_pb = node_pb
-    feature.edge_feat_pb = edge_pb
-    feature.meta = meta
+    # Setup the partition information in feature_store and graph_store
+    feature_store.num_partitions = graph_store.num_partitions = num_partitions
+    feature_store.partition_idx = graph_store.partition_idx = partition_idx
+    feature_store.node_feat_pb = graph_store.node_pb = node_pb
+    feature_store.edge_feat_pb = graph_store.edge_pb = edge_pb
+    feature_store.meta = graph_store.meta = meta
 
     print(
         f"-------- meta={meta}, partition_idx={partition_idx}, node_pb={node_pb} "
     )
 
-    # load the label file and put into graph as labels
+    # load the label file and put into graph_store as labels
     if node_label_file is not None:
         if isinstance(node_label_file, dict):
             whole_node_labels = {}
@@ -94,10 +88,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
         else:
             whole_node_labels = torch.load(node_label_file)
     node_labels = whole_node_labels
-    graph.labels = node_labels
-    feature.labels = node_labels
-
-    partition_data = (feature, graph)
+    feature_store.labels = node_labels
 
     # Initialize distributed context.
     current_ctx = DistContext(
@@ -107,7 +98,6 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
         global_rank=node_rank * num_training_procs_per_node + local_proc_rank,
         group_name='distributed-sage-supervised-trainer')
     current_device = torch.device('cpu')
-    rpc_worker_names = {}
 
     # Initialize DDP training process group.
     torch.distributed.init_process_group(
@@ -123,7 +113,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     num_neighbors = [int(i) for i in num_neighbors]
     # Create distributed neighbor loader for training
     train_loader = pyg_dist.DistNeighborLoader(
-        data=partition_data,
+        data=(feature_store, graph_store),
         num_neighbors=num_neighbors,
         input_nodes=train_idx,
         batch_size=batch_size,
@@ -139,6 +129,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
         drop_last=True,
         temporal_strategy='uniform',
         time_attr='edge_time',
+        input_time=input_time,
     )
 
     # setup the train seeds for the loader
@@ -147,7 +138,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
 
     # Create distributed neighbor loader for testing.
     test_loader = pyg_dist.DistNeighborLoader(
-        data=partition_data,
+        data=(feature_store, graph_store),
         num_neighbors=num_neighbors,
         input_nodes=test_idx,
         batch_size=batch_size,
@@ -163,6 +154,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
         drop_last=True,
         temporal_strategy='uniform',
         time_attr='edge_time',
+        input_time=input_time,
     )
 
     # Define model and optimizer.
@@ -255,7 +247,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--dataset_root_dir",
         type=str,
-        default='../../data/products',
+        default='../../../data/partitions/ogbn-products',
         help="The root directory (relative path) of partitioned ogbn dataset.",
     )
     parser.add_argument(
