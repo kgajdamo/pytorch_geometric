@@ -39,7 +39,7 @@ def test(model, loader):
 
 def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
                       num_training_procs_per_node: int, dataset_name: str,
-                      parts_dir: str, edge_label_file: str, in_channels: int,
+                      parts_dir: str, node_label_file: str, in_channels: int,
                       out_channels: int, train_idx: torch.Tensor,
                       test_idx: torch.Tensor, epochs: int, num_neighbors: str,
                       batch_size: int, num_workers: int, concurrency: int,
@@ -66,7 +66,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     (meta, num_partitions, partition_idx, node_pb,
      edge_pb) = load_partition_info(
          osp.join(parts_dir, f'{dataset_name}-partitions'), node_rank)
-
+    
     input_time = torch.arange(len(node_pb))
 
     # Setup the partition information in feature_store and graph_store
@@ -81,15 +81,15 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     )
 
     # load the label file and put into graph_store as labels
-    if edge_label_file is not None:
-        if isinstance(edge_label_file, dict):
-            whole_edge_labels = {}
-            for ntype, file in edge_label_file.items():
-                whole_edge_labels[ntype] = torch.load(file)
+    if node_label_file is not None:
+        if isinstance(node_label_file, dict):
+            whole_node_labels = {}
+            for ntype, file in node_label_file.items():
+                whole_node_labels[ntype] = torch.load(file)
         else:
-            whole_edge_labels = torch.load(edge_label_file)
-    edge_labels = whole_edge_labels
-    feature_store.labels = edge_labels
+            whole_node_labels = torch.load(node_label_file)
+    node_labels = whole_node_labels
+    feature_store.labels = node_labels
 
     # Initialize distributed context.
     current_ctx = DistContext(
@@ -113,7 +113,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
     num_neighbors = num_neighbors.split(",")
     num_neighbors = [int(i) for i in num_neighbors]
     # Create distributed neighbor loader for training
-    train_loader = pyg_dist.DistLinkNeighborLoader(
+    train_loader = pyg_dist.DistNeighborLoader(
         data=(feature_store, graph_store),
         num_neighbors=num_neighbors,
         input_nodes=train_idx,
@@ -139,7 +139,7 @@ def run_training_proc(local_proc_rank: int, num_nodes: int, node_rank: int,
                               num_training_procs_per_node)[local_proc_rank]
 
     # Create distributed neighbor loader for testing.
-    test_loader = pyg_dist.DistLinkNeighborLoader(
+    test_loader = pyg_dist.DistNeighborLoader(
         data=(feature_store, graph_store),
         num_neighbors=num_neighbors,
         input_nodes=test_idx,
@@ -371,7 +371,7 @@ if __name__ == '__main__':
                          args.dataset_root_dir, f'{args.num_nodes}-parts')
     data_pidx = args.node_rank % args.num_dataset_partitions
 
-    edge_label_file = osp.join(parts_dir, f'{args.dataset}-label', 'label.pt')
+    node_label_file = osp.join(parts_dir, f'{args.dataset}-label', 'label.pt')
 
     train_idx = torch.load(
         osp.join(parts_dir, f'{args.dataset}-train-partitions',
@@ -385,7 +385,7 @@ if __name__ == '__main__':
     torch.multiprocessing.spawn(
         run_training_proc,
         args=(args.num_nodes, args.node_rank, args.num_training_procs,
-              args.dataset, parts_dir, edge_label_file, args.in_channel,
+              args.dataset, parts_dir, node_label_file, args.in_channel,
               args.out_channel, train_idx, test_idx, args.epochs,
               args.num_neighbors, args.batch_size, args.num_workers,
               args.concurrency, args.learning_rate, args.master_addr,

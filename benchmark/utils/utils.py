@@ -1,3 +1,4 @@
+import copy
 import os
 import os.path as osp
 from datetime import datetime
@@ -8,7 +9,7 @@ from tqdm import tqdm
 
 import torch_geometric.transforms as T
 from torch_geometric.data import HeteroData
-from torch_geometric.datasets import OGB_MAG, Reddit
+from torch_geometric.datasets import OGB_MAG, MovieLens, Reddit
 from torch_geometric.nn import GAT, GCN, PNA, EdgeCNN, GraphSAGE
 from torch_geometric.utils import index_to_mask
 
@@ -41,13 +42,18 @@ def get_dataset_with_transformation(name, root, use_sparse_tensor=False,
     path = osp.join(osp.dirname(osp.realpath(__file__)), root, name)
     transform = T.ToSparseTensor(
         remove_edge_index=False) if use_sparse_tensor else None
-    if name == 'ogbn-mag':
+
+    hetero = name == 'ogbn-mag' or name == 'MovieLens'
+    if hetero:
         if transform is None:
             transform = T.ToUndirected(merge=True)
         else:
             transform = T.Compose([T.ToUndirected(merge=True), transform])
+
+    if name == 'ogbn-mag':
         dataset = OGB_MAG(root=path, preprocess='metapath2vec',
                           transform=transform)
+
     elif name == 'ogbn-products':
         if transform is None:
             transform = T.RemoveDuplicatedEdges()
@@ -60,6 +66,10 @@ def get_dataset_with_transformation(name, root, use_sparse_tensor=False,
     elif name == 'Reddit':
         dataset = Reddit(root=path, transform=transform)
 
+    elif name == 'MovieLens':
+        dataset = MovieLens(root=path, model_name='all-MiniLM-L6-v2',
+                            transform=transform)
+
     data = dataset[0]
 
     if name == 'ogbn-products':
@@ -69,6 +79,24 @@ def get_dataset_with_transformation(name, root, use_sparse_tensor=False,
         data.val_mask = index_to_mask(split_idx['valid'], size=data.num_nodes)
         data.test_mask = index_to_mask(split_idx['test'], size=data.num_nodes)
         data.y = data.y.squeeze()
+    # elif name == 'MovieLens':
+    # Add user node features for message passing:
+    # data['user'].x = torch.eye(data['user'].num_nodes)
+    # del data['user'].num_nodes
+
+    # # Add a reverse ('movie', 'rev_rates', 'user') relation for message passing:
+    # data['user', 'movie'].edge_label = data['user',
+    #                                         'movie'].edge_label
+    # del data['movie', 'rev_rates', 'user'].edge_label  # Remove "reverse" label.
+
+    # Perform a link-level split into training, validation, and test edges:
+    # data, _, _ = T.RandomLinkSplit(
+    #     num_val=0.1,
+    #     num_test=0.1,
+    #     neg_sampling_ratio=0.0,
+    #     edge_types=[('user', 'rates', 'movie')],
+    #     rev_edge_types=[('movie', 'rev_rates', 'user')],
+    # )(data)
 
     if bf16:
         if isinstance(data, HeteroData):
