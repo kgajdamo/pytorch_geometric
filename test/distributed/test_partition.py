@@ -19,7 +19,7 @@ try:
     torch.ops.torch_sparse.partition(rowptr, col, None, 1, True)
     WITH_METIS = True
 except (AttributeError, RuntimeError):
-    WITH_METIS = False
+    WITH_METIS = True
 
 
 @pytest.mark.skipif(not WITH_METIS, reason='Not compiled with METIS support')
