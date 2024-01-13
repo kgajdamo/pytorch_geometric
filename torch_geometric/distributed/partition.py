@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import os.path as osp
+from collections import defaultdict
 from typing import List, Optional, Union
 
 import torch
@@ -212,6 +213,7 @@ class Partitioner:
                         'size': size,
                     }
 
+                    efeat = defaultdict(dict)
                     if 'edge_attr' in part_data:
                         edge_attr = part_data.edge_attr[mask][perm]
                         efeat[edge_type] = {
@@ -220,7 +222,10 @@ class Partitioner:
                         }
                         if self.is_edge_level_time:
                             edge_time = part_data.edge_time[mask][perm]
-                            efeat[edge_type].update({'edge_time': edge_time})
+                        elif 'time' in part_data:
+                            edge_time = part_data.time[mask][perm]
+
+                        efeat[edge_type].update({'edge_time': edge_time})
 
                 torch.save(efeat, osp.join(path, 'edge_feats.pt'))
                 torch.save(graph, osp.join(path, 'graph.pt'))
@@ -312,6 +317,7 @@ class Partitioner:
 
                 torch.save(nfeat, osp.join(path, 'node_feats.pt'))
 
+                efeat = defaultdict()
                 if 'edge_attr' in part_data:
                     efeat = {
                         'global_id': edge_id,

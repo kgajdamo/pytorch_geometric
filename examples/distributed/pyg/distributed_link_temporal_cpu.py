@@ -50,10 +50,10 @@ class EdgeDecoder(torch.nn.Module):
 
 
 class Model(torch.nn.Module):
-    def __init__(self, hidden_channels, data):
+    def __init__(self, hidden_channels, metadata):
         super().__init__()
         self.encoder = GNNEncoder(hidden_channels, hidden_channels)
-        self.encoder = to_hetero(self.encoder, data.metadata(), aggr='sum')
+        self.encoder = to_hetero(self.encoder, metadata, aggr='sum')
         self.decoder = EdgeDecoder(hidden_channels)
 
     def forward(self, x_dict, edge_index_dict, edge_label_index):
@@ -242,6 +242,10 @@ def run_proc(
     feature = LocalFeatureStore.from_partition(
         osp.join(root_dir, f'{dataset}-partitions'), node_rank)
 
+    edge_label_time = torch.arange(graph._edge_index[(('user', 'rates',
+                                                       'movie'),
+                                                      'coo')].size(1))
+
     # setup the partition information in LocalGraphStore and LocalFeatureStore
     graph.num_partitions = feature.num_partitions = num_partitions
     graph.partition_idx = feature.partition_idx = partition_idx
@@ -278,6 +282,7 @@ def run_proc(
         data=partition_data,
         edge_label_index=train_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
+        edge_label_time=edge_label_time,
         disjoint=True,
         time_attr='edge_time',
         temporal_strategy='uniform',
@@ -299,6 +304,7 @@ def run_proc(
         data=partition_data,
         edge_label_index=test_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
+        edge_label_time=edge_label_time,
         disjoint=True,
         time_attr='edge_time',
         temporal_strategy='uniform',
@@ -317,7 +323,9 @@ def run_proc(
     )
 
     print('--- Initialize model ...')
-    model = Model(hidden_channels=32, data=partition_data).to(current_device)
+
+    metadata = [meta['node_types'], [tuple(e) for e in meta['edge_types']]]
+    model = Model(hidden_channels=32, metadata=metadata).to(current_device)
 
     # # Define model and optimizer.
     # model = GraphSAGE(
@@ -339,9 +347,7 @@ def run_proc(
             torch.distributed.barrier()
 
     if is_hetero:
-        # Turn model to hetero and initialize parameters
-        metadata = [meta['node_types'], [tuple(e) for e in meta['edge_types']]]
-        model = to_hetero(model, metadata).to(current_device)
+        # initialize model parameters
         init_params()
         torch.distributed.barrier()
 
