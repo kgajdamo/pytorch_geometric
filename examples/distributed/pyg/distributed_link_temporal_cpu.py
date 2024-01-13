@@ -6,6 +6,7 @@ from contextlib import nullcontext
 import torch
 import torch.distributed
 import torch.nn.functional as F
+from torch.nn import Linear
 from torch.nn.parallel import DistributedDataParallel
 from tqdm import tqdm
 
@@ -13,12 +14,51 @@ import torch_geometric.distributed as pyg_dist
 from torch_geometric.distributed import LocalFeatureStore, LocalGraphStore
 from torch_geometric.distributed.dist_context import DistContext
 from torch_geometric.distributed.partition import load_partition_info
-from torch_geometric.nn import GraphSAGE, to_hetero
+from torch_geometric.nn import SAGEConv, to_hetero
 
 # import logging
 # logging.basicConfig(
 #     format='%(levelname)s:%(process)d:%(message)s', level=logging.DEBUG
 # )
+
+
+class GNNEncoder(torch.nn.Module):
+    def __init__(self, hidden_channels, out_channels):
+        super().__init__()
+        self.conv1 = SAGEConv((-1, -1), hidden_channels)
+        self.conv2 = SAGEConv((-1, -1), out_channels)
+
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index).relu()
+        x = self.conv2(x, edge_index)
+        return x
+
+
+class EdgeDecoder(torch.nn.Module):
+    def __init__(self, hidden_channels):
+        super().__init__()
+        self.lin1 = Linear(2 * hidden_channels, hidden_channels)
+        self.lin2 = Linear(hidden_channels, 1)
+
+    def forward(self, z_dict, edge_label_index):
+        row, col = edge_label_index
+        z = torch.cat([z_dict['user'][row], z_dict['movie'][col]], dim=-1)
+
+        z = self.lin1(z).relu()
+        z = self.lin2(z)
+        return z.view(-1)
+
+
+class Model(torch.nn.Module):
+    def __init__(self, hidden_channels, data):
+        super().__init__()
+        self.encoder = GNNEncoder(hidden_channels, hidden_channels)
+        self.encoder = to_hetero(self.encoder, data.metadata(), aggr='sum')
+        self.decoder = EdgeDecoder(hidden_channels)
+
+    def forward(self, x_dict, edge_index_dict, edge_label_index):
+        z_dict = self.encoder(x_dict, edge_index_dict)
+        return self.decoder(z_dict, edge_label_index)
 
 
 @torch.no_grad()
@@ -238,6 +278,9 @@ def run_proc(
         data=partition_data,
         edge_label_index=train_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
+        disjoint=True,
+        time_attr='edge_time',
+        temporal_strategy='uniform',
         current_ctx=current_ctx,
         device=current_device,
         num_neighbors=num_neighbors,
@@ -256,6 +299,9 @@ def run_proc(
         data=partition_data,
         edge_label_index=test_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
+        disjoint=True,
+        time_attr='edge_time',
+        temporal_strategy='uniform',
         current_ctx=current_ctx,
         device=current_device,
         num_neighbors=num_neighbors,
@@ -271,13 +317,15 @@ def run_proc(
     )
 
     print('--- Initialize model ...')
-    # Define model and optimizer.
-    model = GraphSAGE(
-        in_channels=128 if is_hetero else 100,  # num_features
-        hidden_channels=256,
-        num_layers=len(num_neighbors),
-        out_channels=349 if is_hetero else 47,  # num_classes in dataset
-    ).to(current_device)
+    model = Model(hidden_channels=32, data=partition_data).to(current_device)
+
+    # # Define model and optimizer.
+    # model = GraphSAGE(
+    #     in_channels=128 if is_hetero else 100,  # num_features
+    #     hidden_channels=256,
+    #     num_layers=len(num_neighbors),
+    #     out_channels=349 if is_hetero else 47,  # num_classes in dataset
+    # ).to(current_device)
 
     @torch.no_grad()
     def init_params():
@@ -299,7 +347,7 @@ def run_proc(
 
     # Enable DDP
     model = DistributedDataParallel(model, find_unused_parameters=is_hetero)
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.0004)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     torch.distributed.barrier()
 
     # Train and test

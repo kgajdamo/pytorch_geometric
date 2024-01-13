@@ -154,7 +154,7 @@ if __name__ == '__main__':
         choices=['ogbn-mag', 'ogbn-products', 'MovieLens',
                  'Reddit'], default='ogbn-products')
     add('--root_dir', default='../../../data', type=str)
-    add('--num_partitions', type=int, default=4)
+    add('--num_partitions', type=int, default=2)
     add('--recursive', action='store_true')
     # TODO (kgajdamo) Add support for arguments below:
     # add('--use-sparse-tensor', action='store_true')
