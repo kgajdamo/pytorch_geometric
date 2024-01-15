@@ -194,13 +194,6 @@ def run_proc(
     progress_bar: bool,
     logfile: str,
 ):
-    # if dataset == 'ogbn-mag':
-    #     is_hetero = True
-    # elif dataset == 'ogbn-products':
-    #     is_hetero = False
-    # else:
-    #     raise NotImplementedError(f'This example supports only OGB datasets: '
-    #                               f'(ogbn-products, ogbn-mag), got {dataset}')
     is_hetero = True
 
     print('--- Loading data partition files ...')
@@ -341,7 +334,8 @@ def run_proc(
         with train_loader as iterator:
             batch = next(iter(iterator))
             batch = batch.to(current_device, 'edge_index')
-            model(batch.x_dict, batch.edge_index_dict)
+            model(batch.x_dict, batch.edge_index_dict,
+                  batch['user', 'movie'].edge_label_index)
             del batch
             torch.distributed.barrier()
 
