@@ -1001,7 +1001,8 @@ class DistNeighborSampler:
             efeats = {}
             # Collect node labels of input node type.
             node_labels = self.feature_store.labels
-            if node_labels is not None:
+            if node_labels is not None and isinstance(self.input_type,
+                                                      NodeType):
                 nlabels = node_labels[output.node[self.input_type]]
             else:
                 nlabels = None
@@ -1033,6 +1034,8 @@ class DistNeighborSampler:
                         efeats[edge_type] = efeat
                     else:
                         efeats[edge_type] = None
+            else:
+                efeats = None
 
         else:  # Homo
             # Collect node labels.

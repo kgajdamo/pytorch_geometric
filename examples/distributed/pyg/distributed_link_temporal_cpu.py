@@ -242,9 +242,8 @@ def run_proc(
     feature = LocalFeatureStore.from_partition(
         osp.join(root_dir, f'{dataset}-partitions'), node_rank)
 
-    edge_label_time = torch.arange(graph._edge_index[(('user', 'rates',
-                                                       'movie'),
-                                                      'coo')].size(1))
+    train_edge_label_time = torch.arange(train_edge_label_index[1].size(1))
+    test_edge_label_time = torch.arange(test_edge_label_index[1].size(1))
 
     # setup the partition information in LocalGraphStore and LocalFeatureStore
     graph.num_partitions = feature.num_partitions = num_partitions
@@ -282,7 +281,7 @@ def run_proc(
         data=partition_data,
         edge_label_index=train_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
-        edge_label_time=edge_label_time,
+        edge_label_time=train_edge_label_time,
         disjoint=True,
         time_attr='edge_time',
         temporal_strategy='uniform',
@@ -304,7 +303,7 @@ def run_proc(
         data=partition_data,
         edge_label_index=test_edge_label_index,
         edge_label=None,  #edge_label if neg_ratio is not None else None,
-        edge_label_time=edge_label_time,
+        edge_label_time=test_edge_label_time,
         disjoint=True,
         time_attr='edge_time',
         temporal_strategy='uniform',
