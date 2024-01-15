@@ -108,6 +108,7 @@ class DistLinkNeighborLoader(LinkLoader, DistLoader):
             link_sampler=dist_sampler,
             edge_label_index=edge_label_index,
             edge_label=edge_label,
+            edge_label_time=edge_label_time,
             neg_sampling=neg_sampling,
             neg_sampling_ratio=neg_sampling_ratio,
             transform=transform,
