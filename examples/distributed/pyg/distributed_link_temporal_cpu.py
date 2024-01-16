@@ -65,60 +65,55 @@ class Model(torch.nn.Module):
 def test(
     model,
     test_loader,
-    is_hetero,
     dist_context,
     device,
     logfile=None,
     num_loader_threads=10,
     progress_bar=True,
 ):
-    def test_homo(batch):
-        batch = batch.to(device)
-        out = model(batch.x, batch.edge_index)[:batch.batch_size]
-        y_pred = out.argmax(dim=-1)
-        y_true = batch.y[:batch.batch_size]
-        return y_pred, y_true
-
-    def test_hetero(batch):
-        batch = batch.to(device, 'edge_index')
-        batch_size = batch['paper'].batch_size
-        out = model(batch.x_dict, batch.edge_index_dict)
-        out = out['paper'][:batch_size]
-        y_pred = out.argmax(dim=-1)
-        y_true = batch['paper'].y[:batch_size]
-        return y_pred, y_true
-
-    test_fn = test_hetero if is_hetero else test_homo
-    total_examples = total_correct = 0
-    # Save result at each iteration
-    log = open(logfile, 'a+') if logfile else nullcontext()
     multithreading = (test_loader.enable_multithreading(num_loader_threads)
                       if test_loader.num_workers > 0 else nullcontext()
                       )  # speeds up dataloading on CPU
-    with log:
-        with multithreading:
-            if progress_bar:
-                test_loader = tqdm(test_loader,
-                                   desc=f'[Node {dist_context.rank}] Test')
+    preds, targets = [], []
+
+    with multithreading:
+        if progress_bar:
+            test_loader = tqdm(test_loader,
+                               desc=f'[Node {dist_context.rank}] Test')
+        batch_time = time.time()
+        for i, batch in enumerate(test_loader):
+            batch = batch.to(device)
+            pred = model(
+                batch.x_dict,
+                batch.edge_index_dict,
+                batch['user', 'movie'].edge_label_index,
+            ).clamp(min=0, max=5)
+
+            target = batch['user', 'movie'].edge_label.float()
+            preds.append(pred)
+            targets.append(target)
+
+            rmse = (pred - target).pow(2).mean().sqrt()
+
+            result = (f'[Node {dist_context.rank}] Test: '
+                      f'it={i}, RMSE={rmse:.4}, '
+                      f'time={(time.time() - batch_time):.4}')
             batch_time = time.time()
-            for i, batch in enumerate(test_loader):
-                y_pred, y_true = test_fn(batch)
-                total_correct += int((y_pred == y_true).sum())
-                total_examples += y_pred.size(0)
-                batch_acc = int((y_pred == y_true).sum()) / y_pred.size(0)
-                result = (f'[Node {dist_context.rank}] Test: '
-                          f'it={i}, acc={batch_acc:.4}, '
-                          f'time={(time.time() - batch_time):.4}')
-                batch_time = time.time()
+            if logfile:
+                log = open(logfile, 'a+')
                 log.write(f'{result}\n')
-                if not progress_bar:
-                    print(result)
+                log.close()
+            if not progress_bar:
+                print(result)
+        pred = torch.cat(preds, dim=0)
+        target = torch.cat(targets, dim=0)
+        total_rmse = (pred - target).pow(2).mean().sqrt()
+
     torch.distributed.barrier()
-    return total_correct / total_examples
+    return float(total_rmse)
 
 
-def training(
-    is_hetero,
+def train(
     model,
     train_loader,
     optimizer,
@@ -128,50 +123,46 @@ def training(
     num_loader_threads=10,
     progress_bar=True,
 ):
-    def train_homo(batch):
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        out = model(batch.x, batch.edge_index)[:batch.batch_size]
-        loss = F.cross_entropy(out, batch.y[:batch.batch_size])
-        loss.backward()
-        optimizer.step()
-        return loss
-
-    def train_hetero(batch):
-        batch_size = batch['paper'].batch_size
-        batch = batch.to(device, 'edge_index')
-        optimizer.zero_grad()
-        out = model(batch.x_dict, batch.edge_index_dict)
-        out = out['paper'][:batch_size]
-        target = batch['paper'].y[:batch_size]
-        loss = F.cross_entropy(out, target)
-        loss.backward()
-        optimizer.step()
-        return loss
-
-    train_fn = train_hetero if is_hetero else train_homo
-    # Save result at each iteration
-    log = open(logfile, 'a+') if logfile else nullcontext()
     multithreading = (train_loader.enable_multithreading(num_loader_threads)
                       if train_loader.num_workers > 0 else nullcontext())
-    with log:
-        with multithreading:
-            if progress_bar:
-                train_loader = tqdm(train_loader,
-                                    desc=f'[Node {dist_context.rank}] Train')
+
+    total_loss = total_examples = 0
+
+    with multithreading:
+        if progress_bar:
+            train_loader = tqdm(train_loader,
+                                desc=f'[Node {dist_context.rank}] Train')
+        batch_time = time.time()
+        for i, batch in enumerate(train_loader):
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            pred = model(
+                batch.x_dict,
+                batch.edge_index_dict,
+                batch['user', 'movie'].edge_label_index,
+            )
+            target = batch['user', 'movie'].edge_label.float()
+            loss = F.mse_loss(pred, target)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += float(loss * pred.size(0))
+            total_examples += pred.size(0)
+
+            result = (f'[Node {dist_context.rank}] Train: '
+                      f'it={i}, loss={loss:.4}, '
+                      f'time={(time.time() - batch_time):.4}')
             batch_time = time.time()
-            for i, batch in enumerate(train_loader):
-                loss = train_fn(batch)
-                result = (f'[Node {dist_context.rank}] Train: '
-                          f'it={i}, loss={loss:.4}, '
-                          f'time={(time.time() - batch_time):.4}')
-                batch_time = time.time()
+            if logfile:
+                # Save result at each iteration
+                log = open(logfile, 'a+')
                 log.write(f'{result}\n')
-                if not progress_bar:
-                    print(result)
+                log.close()
+            if not progress_bar:
+                print(result)
 
     torch.distributed.barrier()
-    return loss
+    return total_loss / total_examples
 
 
 def run_proc(
@@ -194,8 +185,6 @@ def run_proc(
     progress_bar: bool,
     logfile: str,
 ):
-    is_hetero = True
-
     print('--- Loading data partition files ...')
     root_dir = osp.join(osp.dirname(osp.realpath(__file__)), dataset_root_dir)
     edge_label_file = osp.join(root_dir, f'{dataset}-label', 'label.pt')
@@ -212,11 +201,9 @@ def run_proc(
             f'partition{node_rank}.pt',
         ))
 
-    if is_hetero:
-        train_edge_label_index = (('user', 'rates', 'movie'),
-                                  train_edge_label_index)
-        test_edge_label_index = (('user', 'rates', 'movie'),
-                                 test_edge_label_index)
+    train_edge_label_index = (('user', 'rates', 'movie'),
+                              train_edge_label_index)
+    test_edge_label_index = (('user', 'rates', 'movie'), test_edge_label_index)
 
     # load partition information
     (
@@ -235,9 +222,6 @@ def run_proc(
     feature = LocalFeatureStore.from_partition(
         osp.join(root_dir, f'{dataset}-partitions'), node_rank)
 
-    train_edge_label_time = torch.arange(train_edge_label_index[1].size(1))
-    test_edge_label_time = torch.arange(test_edge_label_index[1].size(1))
-
     # setup the partition information in LocalGraphStore and LocalFeatureStore
     graph.num_partitions = feature.num_partitions = num_partitions
     graph.partition_idx = feature.partition_idx = partition_idx
@@ -247,13 +231,27 @@ def run_proc(
     feature.labels = torch.load(edge_label_file)
     partition_data = (feature, graph)
 
+    # Add user node features for message passing:
+    x = torch.eye(feature._global_id['user'].size(0),
+                  feature._feat[('movie', 'x')].size(1))
+    feature.put_tensor(x, group_name='user', attr_name='x')
+
+    train_edge_label_time = torch.arange(
+        train_edge_label_index[1].size(1)).clone()
+    test_edge_label_time = torch.arange(
+        test_edge_label_index[1].size(1)).clone()
+
+    train_edge_label = feature.labels[:train_edge_label_index[1].
+                                      size(1)].clone()
+    test_edge_label = feature.labels[test_edge_label_index[1].size(1):].clone()
+
     # Initialize distributed context
     current_ctx = DistContext(
         world_size=num_nodes,
         rank=node_rank,
         global_world_size=num_nodes,
         global_rank=node_rank,
-        group_name='distributed-sage-supervised-Node',
+        group_name='distributed-classification-Link',
     )
     current_device = torch.device('cpu')
 
@@ -273,7 +271,7 @@ def run_proc(
     train_loader = pyg_dist.DistLinkNeighborLoader(
         data=partition_data,
         edge_label_index=train_edge_label_index,
-        edge_label=None,  #edge_label if neg_ratio is not None else None,
+        edge_label=train_edge_label,
         edge_label_time=train_edge_label_time,
         disjoint=True,
         time_attr='edge_time',
@@ -290,12 +288,13 @@ def run_proc(
         master_port=train_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
+        filter_per_worker=False,
     )
     # Create distributed neighbor loader for testing.
     test_loader = pyg_dist.DistLinkNeighborLoader(
         data=partition_data,
         edge_label_index=test_edge_label_index,
-        edge_label=None,  #edge_label if neg_ratio is not None else None,
+        edge_label=test_edge_label,
         edge_label_time=test_edge_label_time,
         disjoint=True,
         time_attr='edge_time',
@@ -312,20 +311,13 @@ def run_proc(
         master_port=test_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
+        filter_per_worker=False,
     )
 
     print('--- Initialize model ...')
 
     metadata = [meta['node_types'], [tuple(e) for e in meta['edge_types']]]
     model = Model(hidden_channels=32, metadata=metadata).to(current_device)
-
-    # # Define model and optimizer.
-    # model = GraphSAGE(
-    #     in_channels=128 if is_hetero else 100,  # num_features
-    #     hidden_channels=256,
-    #     num_layers=len(num_neighbors),
-    #     out_channels=349 if is_hetero else 47,  # num_classes in dataset
-    # ).to(current_device)
 
     @torch.no_grad()
     def init_params():
@@ -339,13 +331,12 @@ def run_proc(
             del batch
             torch.distributed.barrier()
 
-    if is_hetero:
-        # initialize model parameters
-        init_params()
-        torch.distributed.barrier()
+    # initialize model parameters
+    init_params()
+    torch.distributed.barrier()
 
     # Enable DDP
-    model = DistributedDataParallel(model, find_unused_parameters=is_hetero)
+    model = DistributedDataParallel(model, find_unused_parameters=False)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     torch.distributed.barrier()
 
@@ -356,8 +347,7 @@ def run_proc(
         epoch = i + 1
         print(f'Train Epoch {epoch}/{num_epochs}')
         model.train()
-        loss = training(
-            is_hetero,
+        loss = train(
             model,
             train_loader,
             optimizer,
@@ -376,10 +366,9 @@ def run_proc(
             start = time.time()
             print(f'Test Epoch {epoch}/{num_epochs}')
             model.eval()
-            acc = test(
+            rmse = test(
                 model,
                 test_loader,
-                is_hetero,
                 current_ctx,
                 current_device,
                 logfile,
@@ -387,7 +376,7 @@ def run_proc(
                 progress_bar,
             )
             print(f'[Node {current_ctx.rank}] Epoch {epoch}: '
-                  f'Test Accuracy = {acc:.4f}, '
+                  f'Test RMSE = {rmse:.4f}, '
                   f'Test Time = {(time.time() - start):.2f}')
     print(f'--- [Node {current_ctx.rank}] Closing ---')
     torch.distributed.destroy_process_group()
@@ -395,8 +384,7 @@ def run_proc(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Arguments for distributed training of supervised SAGE.'
-    )  # change description
+        description='Arguments for distributed link classification training.')
     parser.add_argument(
         '--dataset',
         type=str,
