@@ -345,5 +345,8 @@ class LinkLoader(
         # Execute `filter_fn` in the main process:
         return DataLoaderIterator(super()._get_iterator(), self.filter_fn)
 
+    def __enter__(self):
+        return self
+
     def __repr__(self) -> str:
         return f'{self.__class__.__name__}()'

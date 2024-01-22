@@ -202,8 +202,9 @@ def run_proc(
         ))
 
     train_edge_label_index = (('user', 'rates', 'movie'),
-                              train_edge_label_index)
-    test_edge_label_index = (('user', 'rates', 'movie'), test_edge_label_index)
+                              train_edge_label_index.clone())
+    test_edge_label_index = (('user', 'rates', 'movie'),
+                             test_edge_label_index.clone())
 
     # load partition information
     (
@@ -288,7 +289,7 @@ def run_proc(
         master_port=train_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
-        filter_per_worker=False,
+        # filter_per_worker=False,
     )
     # Create distributed neighbor loader for testing.
     test_loader = pyg_dist.DistLinkNeighborLoader(
@@ -311,7 +312,7 @@ def run_proc(
         master_port=test_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
-        filter_per_worker=False,
+        # filter_per_worker=False,
     )
 
     print('--- Initialize model ...')
