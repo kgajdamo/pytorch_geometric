@@ -38,6 +38,7 @@ class DistLinkNeighborLoader(LinkLoader, DistLoader):
         All other arguments follow the interface of
         :class:`torch_geometric.loader.LinkNeighborLoader`.
     """
+
     def __init__(
         self,
         data: Tuple[LocalFeatureStore, LocalGraphStore],
@@ -74,7 +75,8 @@ class DistLinkNeighborLoader(LinkLoader, DistLoader):
                 f"{'set' if edge_label_time is not None else 'not set'} "
                 f"while 'time_attr' is "
                 f"{'set' if time_attr is not None else 'not set'}. "
-                f"Both arguments must be provided for temporal sampling.")
+                f"Both arguments must be provided for temporal sampling."
+            )
 
         channel = torch.multiprocessing.Queue() if async_sampling else None
 

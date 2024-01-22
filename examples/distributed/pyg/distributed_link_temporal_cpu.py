@@ -16,10 +16,10 @@ from torch_geometric.distributed.dist_context import DistContext
 from torch_geometric.distributed.partition import load_partition_info
 from torch_geometric.nn import SAGEConv, to_hetero
 
-# import logging
-# logging.basicConfig(
-#     format='%(levelname)s:%(process)d:%(message)s', level=logging.DEBUG
-# )
+import logging
+logging.basicConfig(
+    format='%(levelname)s:%(process)d:%(message)s', level=logging.DEBUG
+)
 
 
 class GNNEncoder(torch.nn.Module):
@@ -71,15 +71,18 @@ def test(
     num_loader_threads=10,
     progress_bar=True,
 ):
-    multithreading = (test_loader.enable_multithreading(num_loader_threads)
-                      if test_loader.num_workers > 0 else nullcontext()
-                      )  # speeds up dataloading on CPU
+    multithreading = (
+        test_loader.enable_multithreading(num_loader_threads)
+        if test_loader.num_workers > 0
+        else nullcontext()
+    )  # speeds up dataloading on CPU
     preds, targets = [], []
 
     with multithreading:
         if progress_bar:
-            test_loader = tqdm(test_loader,
-                               desc=f'[Node {dist_context.rank}] Test')
+            test_loader = tqdm(
+                test_loader, desc=f'[Node {dist_context.rank}] Test'
+            )
         batch_time = time.time()
         for i, batch in enumerate(test_loader):
             batch = batch.to(device)
@@ -95,9 +98,11 @@ def test(
 
             rmse = (pred - target).pow(2).mean().sqrt()
 
-            result = (f'[Node {dist_context.rank}] Test: '
-                      f'it={i}, RMSE={rmse:.4}, '
-                      f'time={(time.time() - batch_time):.4}')
+            result = (
+                f'[Node {dist_context.rank}] Test: '
+                f'it={i}, RMSE={rmse:.4}, '
+                f'time={(time.time() - batch_time):.4}'
+            )
             batch_time = time.time()
             if logfile:
                 log = open(logfile, 'a+')
@@ -123,15 +128,19 @@ def train(
     num_loader_threads=10,
     progress_bar=True,
 ):
-    multithreading = (train_loader.enable_multithreading(num_loader_threads)
-                      if train_loader.num_workers > 0 else nullcontext())
+    multithreading = (
+        train_loader.enable_multithreading(num_loader_threads)
+        if train_loader.num_workers > 0
+        else nullcontext()
+    )
 
     total_loss = total_examples = 0
 
     with multithreading:
         if progress_bar:
-            train_loader = tqdm(train_loader,
-                                desc=f'[Node {dist_context.rank}] Train')
+            train_loader = tqdm(
+                train_loader, desc=f'[Node {dist_context.rank}] Train'
+            )
         batch_time = time.time()
         for i, batch in enumerate(train_loader):
             batch = batch.to(device)
@@ -149,9 +158,11 @@ def train(
             total_loss += float(loss * pred.size(0))
             total_examples += pred.size(0)
 
-            result = (f'[Node {dist_context.rank}] Train: '
-                      f'it={i}, loss={loss:.4}, '
-                      f'time={(time.time() - batch_time):.4}')
+            result = (
+                f'[Node {dist_context.rank}] Train: '
+                f'it={i}, loss={loss:.4}, '
+                f'time={(time.time() - batch_time):.4}'
+            )
             batch_time = time.time()
             if logfile:
                 # Save result at each iteration
@@ -193,18 +204,24 @@ def run_proc(
             root_dir,
             f'{dataset}-train-partitions',
             f'partition{node_rank}.pt',
-        ))
+        )
+    )
     test_edge_label_index = torch.load(
         osp.join(
             root_dir,
             f'{dataset}-test-partitions',
             f'partition{node_rank}.pt',
-        ))
+        )
+    )
 
-    train_edge_label_index = (('user', 'rates', 'movie'),
-                              train_edge_label_index.clone())
-    test_edge_label_index = (('user', 'rates', 'movie'),
-                             test_edge_label_index.clone())
+    train_edge_label_index = (
+        ('user', 'rates', 'movie'),
+        train_edge_label_index,
+    )
+    test_edge_label_index = (
+        ('user', 'rates', 'movie'),
+        test_edge_label_index,
+    )
 
     # load partition information
     (
@@ -213,15 +230,18 @@ def run_proc(
         partition_idx,
         node_pb,
         edge_pb,
-    ) = load_partition_info(osp.join(root_dir, f'{dataset}-partitions'),
-                            node_rank)
+    ) = load_partition_info(
+        osp.join(root_dir, f'{dataset}-partitions'), node_rank
+    )
     print(f'meta={meta}, partition_idx={partition_idx}')
     # load partition into graph
     graph = LocalGraphStore.from_partition(
-        osp.join(root_dir, f'{dataset}-partitions'), node_rank)
+        osp.join(root_dir, f'{dataset}-partitions'), node_rank
+    )
     # load partition into feature
     feature = LocalFeatureStore.from_partition(
-        osp.join(root_dir, f'{dataset}-partitions'), node_rank)
+        osp.join(root_dir, f'{dataset}-partitions'), node_rank
+    )
 
     # setup the partition information in LocalGraphStore and LocalFeatureStore
     graph.num_partitions = feature.num_partitions = num_partitions
@@ -232,19 +252,26 @@ def run_proc(
     feature.labels = torch.load(edge_label_file)
     partition_data = (feature, graph)
 
+    current_device = torch.device('cpu')
+
     # Add user node features for message passing:
-    x = torch.eye(feature._global_id['user'].size(0),
-                  feature._feat[('movie', 'x')].size(1))
+    x = torch.eye(
+        feature._global_id['user'].size(0),
+        feature._feat[('movie', 'x')].size(1),
+    )
     feature.put_tensor(x, group_name='user', attr_name='x')
 
     train_edge_label_time = torch.arange(
-        train_edge_label_index[1].size(1)).clone()
+        train_edge_label_index[1].size(1)
+    ).clone()
     test_edge_label_time = torch.arange(
-        test_edge_label_index[1].size(1)).clone()
+        test_edge_label_index[1].size(1)
+    ).clone()
 
-    train_edge_label = feature.labels[:train_edge_label_index[1].
-                                      size(1)].clone()
-    test_edge_label = feature.labels[test_edge_label_index[1].size(1):].clone()
+    train_edge_label = feature.labels[
+        : train_edge_label_index[1].size(1)
+    ].clone()
+    test_edge_label = feature.labels[test_edge_label_index[1].size(1) :].clone()
 
     # Initialize distributed context
     current_ctx = DistContext(
@@ -254,7 +281,6 @@ def run_proc(
         global_rank=node_rank,
         group_name='distributed-classification-Link',
     )
-    current_device = torch.device('cpu')
 
     print('--- Initialize DDP training group ...')
     # Initialize DDP training process group.
@@ -265,8 +291,9 @@ def run_proc(
         init_method='tcp://{}:{}'.format(master_addr, ddp_port),
     )
     num_neighbors = [int(i) for i in num_neighbors.split(',')]
-    persistent_workers = (True if num_workers > 0 else False
-                          )  # Keep workers RPC alive outside the iterator loop
+    persistent_workers = (
+        True if num_workers > 0 else False
+    )  # Keep workers RPC alive outside the iterator loop
     print('--- Initialize distributed loaders ...')
     # Create distributed neighbor loader for training
     train_loader = pyg_dist.DistLinkNeighborLoader(
@@ -289,7 +316,6 @@ def run_proc(
         master_port=train_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
-        # filter_per_worker=False,
     )
     # Create distributed neighbor loader for testing.
     test_loader = pyg_dist.DistLinkNeighborLoader(
@@ -312,7 +338,6 @@ def run_proc(
         master_port=test_loader_port,
         concurrency=concurrency,
         async_sampling=async_sampling,
-        # filter_per_worker=False,
     )
 
     print('--- Initialize model ...')
@@ -327,8 +352,11 @@ def run_proc(
         with train_loader as iterator:
             batch = next(iter(iterator))
             batch = batch.to(current_device, 'edge_index')
-            model(batch.x_dict, batch.edge_index_dict,
-                  batch['user', 'movie'].edge_label_index)
+            model(
+                batch.x_dict,
+                batch.edge_index_dict,
+                batch['user', 'movie'].edge_label_index,
+            )
             del batch
             torch.distributed.barrier()
 
@@ -358,9 +386,11 @@ def run_proc(
             num_loader_threads,
             progress_bar,
         )
-        print(f'[Node {current_ctx.rank}] Epoch {epoch}: \
+        print(
+            f'[Node {current_ctx.rank}] Epoch {epoch}: \
                 Train Loss = {loss:.4f}, \
-                Train Time = {(time.time() - start):.2f}')
+                Train Time = {(time.time() - start):.2f}'
+        )
 
         # Test accuracy.
         if i % 5 == 0:
@@ -376,16 +406,19 @@ def run_proc(
                 num_loader_threads,
                 progress_bar,
             )
-            print(f'[Node {current_ctx.rank}] Epoch {epoch}: '
-                  f'Test RMSE = {rmse:.4f}, '
-                  f'Test Time = {(time.time() - start):.2f}')
+            print(
+                f'[Node {current_ctx.rank}] Epoch {epoch}: '
+                f'Test RMSE = {rmse:.4f}, '
+                f'Test Time = {(time.time() - start):.2f}'
+            )
     print(f'--- [Node {current_ctx.rank}] Closing ---')
     torch.distributed.destroy_process_group()
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Arguments for distributed link classification training.')
+        description='Arguments for distributed link classification training.'
+    )
     parser.add_argument(
         '--dataset',
         type=str,
@@ -480,8 +513,9 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    print('--- Distributed training example with SAGE and OGB dataset ---'
-          )  # change description
+    print(
+        '--- Distributed training example with SAGE and OGB dataset ---'
+    )  # change description
     print(f'* total nodes: {args.num_nodes}')
     print(f'* node rank: {args.node_rank}')
     print(f'* dataset: {args.dataset}')
