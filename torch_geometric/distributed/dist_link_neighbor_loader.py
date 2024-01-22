@@ -58,7 +58,7 @@ class DistLinkNeighborLoader(LinkLoader, DistLoader):
         time_attr: Optional[str] = None,
         transform: Optional[Callable] = None,
         concurrency: int = 1,
-        filter_per_worker: Optional[bool] = None,
+        filter_per_worker: Optional[bool] = False,
         async_sampling: bool = True,
         device: Optional[torch.device] = None,
         **kwargs,
@@ -114,7 +114,7 @@ class DistLinkNeighborLoader(LinkLoader, DistLoader):
             transform=transform,
             filter_per_worker=filter_per_worker,
             worker_init_fn=self.worker_init_fn,
-            transform_sampler_output=self.channel_get,
+            transform_sampler_output=self.channel_get if channel else None,
             **kwargs,
         )
 
